@@ -2,6 +2,7 @@ import socket
 
 
 def _process_connection(conn: socket.SocketType):
+    _request = conn.recv(512)
     length = int(42).to_bytes(length=4)
 
     correlation_id = 7
@@ -21,6 +22,8 @@ def main():
             _process_connection(conn)
     except KeyboardInterrupt:
         print("Shutting down broker...")
+    finally:
+        server.close()
 
 
 if __name__ == "__main__":
