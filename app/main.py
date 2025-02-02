@@ -2,10 +2,22 @@ import socket
 
 
 def _process_connection(conn: socket.SocketType):
-    _request = conn.recv(512)
-    length = int(42).to_bytes(length=4)
+    request = conn.recv(512)
 
-    correlation_id = 7
+    # Request Header v2
+    # https://kafka.apache.org/protocol.html#protocol_messages
+    # First 4 bytes are the message size
+    _message_size = int.from_bytes(request[:4])
+    # Next 2 bytes are the request API key
+    _request_api_key = int.from_bytes(request[4:6])
+    # Next 2 bytes are the request API version
+    _request_api_version = int.from_bytes(request[6:8])
+    # Finally, the next 4 bytes are the correlation_id
+    correlation_id = int.from_bytes(request[8:12])
+
+    # Keep the length hardcoded for now
+    length = int(42).to_bytes(length=4)
+    # Response Header v0
     header = correlation_id.to_bytes(length=4)
 
     response = length + header
