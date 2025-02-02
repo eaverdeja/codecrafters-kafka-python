@@ -1,5 +1,7 @@
 import socket
 
+UNSUPPORTED_VERSION = 35
+
 
 def _process_connection(conn: socket.SocketType):
     request = conn.recv(512)
@@ -26,7 +28,7 @@ def _process_connection(conn: socket.SocketType):
     # Response Header v0
     header = correlation_id.to_bytes(length=4)
 
-    error_code = int(35).to_bytes(length=2)
+    error_code = int(UNSUPPORTED_VERSION).to_bytes(length=2)
     body = error_code
 
     response = length + header + body
