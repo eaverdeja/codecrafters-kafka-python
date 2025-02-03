@@ -4,9 +4,7 @@ UNSUPPORTED_VERSION = 35
 SUPPORTED_API_VERSIONS = [0, 1, 2, 3, 4]
 
 
-def _process_connection(conn: socket.SocketType):
-    request = conn.recv(512)
-
+def _handle_request(request):
     # Request Header v2
     # https://kafka.apache.org/protocol.html#protocol_messages
     # First 4 bytes are the message size
@@ -76,9 +74,20 @@ def _process_connection(conn: socket.SocketType):
 
     length = (len(header) + len(body)).to_bytes(length=4)
     response = length + header + body
+    return response
 
-    conn.send(response)
-    conn.close()
+
+def _process_connection(conn: socket.SocketType):
+    try:
+        while True:
+            request = conn.recv(512)
+            response = _handle_request(request)
+            conn.send(response)
+    except Exception as e:
+        print(f"Error processing connection: {e}")
+        raise e
+    finally:
+        conn.close()
 
 
 def main():
