@@ -163,6 +163,26 @@ def _handle_describe_topic_partitions_request(request_body: bytes) -> bytes:
     )
 
 
+def _handle_fetch_request(request_body: bytes) -> bytes:
+    # INT32
+    throttle_time_ms = 0
+
+    # INT16
+    error_code = 0
+
+    # INT32
+    session_id = 1
+
+    return (
+        throttle_time_ms.to_bytes(length=4)
+        + error_code.to_bytes(length=2)
+        + session_id.to_bytes(length=4)
+        + encode_varint(1)  # N+1 length of responses array
+        + NULL_BYTE  # End of responses array
+        + NULL_BYTE  # End of response body
+    )
+
+
 def _handle_request(request: bytes):
     # Request Header v2
     # https://kafka.apache.org/protocol.html#protocol_messages
@@ -188,11 +208,13 @@ def _handle_request(request: bytes):
     # INT32
 
     header = correlation_id.to_bytes(length=4)
-    if request_api_key == 18:
+    if request_api_key == ApiVersions.API_KEY:
         body = _handle_api_versions_request(request_body, request_api_version)
-    elif request_api_key == 75:
-        header += b"\x00"
+    elif request_api_key == DescribeTopicPartitions.API_KEY:
+        header += NULL_BYTE
         body = _handle_describe_topic_partitions_request(request_body)
+    elif request_api_key == Fetch.API_KEY:
+        body = _handle_fetch_request(request_body)
     else:
         raise Exception(f"Unsupported API key: {request_api_key}")
 
