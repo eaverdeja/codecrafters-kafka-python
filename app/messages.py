@@ -69,4 +69,5 @@ class DescribeTopicPartitions(KafkaMessage):
     TOPIC_AUTHORIZED_OPERATIONS = 0b0000_1101_1111_1000
 
     class ErrorCodes:
+        NO_ERROR = 0
         UNKNOWN_TOPIC = 3
