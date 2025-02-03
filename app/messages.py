@@ -71,3 +71,31 @@ class DescribeTopicPartitions(KafkaMessage):
     class ErrorCodes:
         NO_ERROR = 0
         UNKNOWN_TOPIC = 3
+
+
+class Fetch(KafkaMessage):
+    """
+    # https://kafka.apache.org/protocol.html#The_Messages_Fetch
+
+    Fetch Response (Version: 16) => throttle_time_ms error_code session_id [responses] TAG_BUFFER
+        throttle_time_ms => INT32
+        error_code => INT16
+        session_id => INT32
+        responses => topic_id [partitions] TAG_BUFFER
+            topic_id => UUID
+            partitions => partition_index error_code high_watermark last_stable_offset log_start_offset [aborted_transactions] preferred_read_replica records TAG_BUFFER
+            partition_index => INT32
+            error_code => INT16
+            high_watermark => INT64
+            last_stable_offset => INT64
+            log_start_offset => INT64
+            aborted_transactions => producer_id first_offset TAG_BUFFER
+                producer_id => INT64
+                first_offset => INT64
+            preferred_read_replica => INT32
+            records => COMPACT_RECORDS
+    """
+
+    API_KEY = 1
+    MIN_VERSION = 0
+    MAX_VERSION = 16

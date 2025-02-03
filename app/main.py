@@ -6,7 +6,7 @@ from app.cluster_metadata import (
     PartitionRecord,
     TopicRecord,
 )
-from app.messages import ApiVersions, DescribeTopicPartitions, KafkaMessage
+from app.messages import ApiVersions, DescribeTopicPartitions, Fetch, KafkaMessage
 from app.utils import NULL_BYTE, encode_varint
 from app.uuid import from_uuid
 
@@ -22,10 +22,7 @@ def _handle_api_versions_request(
     _client_id = request_body[2 : 2 + client_id_length].decode()
 
     # Messages we support
-    messages: list[type[KafkaMessage]] = [
-        ApiVersions,
-        DescribeTopicPartitions,
-    ]
+    messages: list[type[KafkaMessage]] = [ApiVersions, DescribeTopicPartitions, Fetch]
 
     # Compact arrays use N + 1 for their length,
     # for ex., for a single key (N == 1) we need length 2
