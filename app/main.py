@@ -1,4 +1,5 @@
 import asyncio
+from itertools import zip_longest
 
 from app.cluster_metadata import (
     ClusterMetadata,
@@ -66,8 +67,11 @@ def _handle_describe_topic_partitions_request(request_body: bytes) -> bytes:
     _array_length = request_body[offset]
     offset += 1
 
-    topic_name_length = request_body[offset]
-    topic_name = request_body[offset + 1 : offset + topic_name_length].decode()
+    topics = []
+    while (topic_name_length := request_body[offset]) != 0x00:
+        topic_name = request_body[offset + 1 : offset + topic_name_length].decode()
+        offset += topic_name_length + 1  # +1 for the TAG_BUFFER in between topic names
+        topics.append(topic_name)
 
     # Build response body
 
@@ -78,85 +82,84 @@ def _handle_describe_topic_partitions_request(request_body: bytes) -> bytes:
         record.value
         for batch in cluster_metadata
         for record in batch.records
-        if record.value.type == TopicRecord.TYPE
+        if isinstance(record.value, TopicRecord)
+        and record.value.type == TopicRecord.TYPE
+        and record.value.topic_name in topics
     ]
-    topic_record: TopicRecord | None = next(
-        (
-            record
-            for record in topic_records
-            if isinstance(record, TopicRecord) and record.topic_name == topic_name
-        ),
-        None,
-    )
-    partition_records = [
-        record.value
-        for batch in cluster_metadata
-        for record in batch.records
-        if isinstance(record.value, PartitionRecord)
-        and record.value.type == PartitionRecord.TYPE
-        and topic_record
-        and record.value.topic_uuid == topic_record.topic_uuid
-    ]
-    partitions = [
-        (
-            int.to_bytes(DescribeTopicPartitions.ErrorCodes.NO_ERROR, length=2)
-            + int.to_bytes(partition.partition_id, length=4)
-            + int.to_bytes(partition.leader_id, length=4)
-            + int.to_bytes(partition.leader_epoch, length=4)
-            # I'm lazy, so the rest are just mocks of empty arrays
-            + int.to_bytes(1, length=1)  # Replica nodes
-            + int.to_bytes(1, length=1)  # In-sync replicas (ISR)
-            + int.to_bytes(1, length=1)  # Eligible leader replicas (ELR)
-            + int.to_bytes(1, length=1)  # Last known ELR
-            + int.to_bytes(1, length=1)  # Offline replicas
+    topic_values = []
+    for topic_record, topic_name in zip_longest(topic_records, topics):
+        partition_records = [
+            record.value
+            for batch in cluster_metadata
+            for record in batch.records
+            if isinstance(record.value, PartitionRecord)
+            and record.value.type == PartitionRecord.TYPE
+            and topic_record
+            and record.value.topic_uuid == topic_record.topic_uuid
+        ]
+        partitions = [
+            (
+                int.to_bytes(DescribeTopicPartitions.ErrorCodes.NO_ERROR, length=2)
+                + int.to_bytes(partition.partition_id, length=4)
+                + int.to_bytes(partition.leader_id, length=4)
+                + int.to_bytes(partition.leader_epoch, length=4)
+                # I'm lazy, so the rest are just mocks of empty arrays
+                + int.to_bytes(1, length=1)  # Replica nodes
+                + int.to_bytes(1, length=1)  # In-sync replicas (ISR)
+                + int.to_bytes(1, length=1)  # Eligible leader replicas (ELR)
+                + int.to_bytes(1, length=1)  # Last known ELR
+                + int.to_bytes(1, length=1)  # Offline replicas
+                + NULL_BYTE
+            )
+            for partition in partition_records
+        ]
+
+        error_code = (
+            DescribeTopicPartitions.ErrorCodes.UNKNOWN_TOPIC
+            if not topic_record
+            else DescribeTopicPartitions.ErrorCodes.NO_ERROR
+        )
+
+        # Topic ID
+        default_topic_id = (
+            "00000000-0000-0000-0000-00000000000000000000-0000-0000-0000-000000000000"
+        )
+
+        # False
+        is_internal = NULL_BYTE
+
+        # Varint
+        partitions_array_length = encode_varint(len(partitions) + 1)
+
+        topic_authorized_operations = (
+            DescribeTopicPartitions.TOPIC_AUTHORIZED_OPERATIONS
+        )
+
+        topic_name = topic_record.topic_name if topic_record else topic_name
+        topic_id = (
+            from_uuid(topic_record.topic_uuid)
+            if topic_record
+            else int(default_topic_id.replace("-", "")).to_bytes(length=16)
+        )
+        topic_values.append(
+            error_code.to_bytes(length=2)  # INT16
+            + encode_varint(len(topic_name) + 1)
+            + topic_name.encode()
+            + topic_id
+            + is_internal
+            + partitions_array_length
+            + b"".join(partitions)
+            + topic_authorized_operations.to_bytes(length=4)  # 4-byte bitfield
             + NULL_BYTE
         )
-        for partition in partition_records
-    ]
 
-    error_code = (
-        DescribeTopicPartitions.ErrorCodes.UNKNOWN_TOPIC
-        if not topic_record
-        else DescribeTopicPartitions.ErrorCodes.NO_ERROR
-    )
     # INT32
     throttle_time_ms = 0
 
-    # Topic ID
-    default_topic_id = (
-        "00000000-0000-0000-0000-00000000000000000000-0000-0000-0000-000000000000"
-    )
-
-    # False
-    is_internal = NULL_BYTE
-
-    # Varint
-    partitions_array_length = encode_varint(len(partitions) + 1)
-
-    topic_authorized_operations = DescribeTopicPartitions.TOPIC_AUTHORIZED_OPERATIONS
-
-    topic_name = topic_record.topic_name if topic_record else topic_name
-    topic_id = (
-        from_uuid(topic_record.topic_uuid)
-        if topic_record
-        else int(default_topic_id.replace("-", "")).to_bytes(length=16)
-    )
-
     return (
         throttle_time_ms.to_bytes(length=4)  # INT32
-        # Topic array length
-        + encode_varint(2)
-        # 1st topic START
-        + error_code.to_bytes(length=2)  # INT16
-        + encode_varint(len(topic_name) + 1)
-        + topic_name.encode()
-        + topic_id
-        + is_internal
-        + partitions_array_length
-        + b"".join(partitions)
-        + topic_authorized_operations.to_bytes(length=4)  # 4-byte bitfield
-        + NULL_BYTE
-        # 1st topic END
+        + encode_varint(len(topic_values) + 1)
+        + b"".join(topic_values)
         # Cursor used for pagination
         + DescribeTopicPartitions.NULL_CURSOR.to_bytes(length=1)
         + NULL_BYTE
