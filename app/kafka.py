@@ -34,15 +34,15 @@ class DescribeTopicPartitions(KafkaMessage):
             topic_id => UUID
             is_internal => BOOLEAN
             partitions => error_code partition_index leader_id leader_epoch [replica_nodes] [isr_nodes] [eligible_leader_replicas] [last_known_elr] [offline_replicas] TAG_BUFFER
-            error_code => INT16
-            partition_index => INT32
-            leader_id => INT32
-            leader_epoch => INT32
-            replica_nodes => INT32
-            isr_nodes => INT32
-            eligible_leader_replicas => INT32
-            last_known_elr => INT32
-            offline_replicas => INT32
+                error_code => INT16
+                partition_index => INT32
+                leader_id => INT32
+                leader_epoch => INT32
+                replica_nodes => INT32
+                isr_nodes => INT32
+                eligible_leader_replicas => INT32
+                last_known_elr => INT32
+                offline_replicas => INT32
             topic_authorized_operations => INT32
         next_cursor => topic_name partition_index TAG_BUFFER
             topic_name => COMPACT_STRING
@@ -53,39 +53,20 @@ class DescribeTopicPartitions(KafkaMessage):
     MIN_VERSION = 0
     MAX_VERSION = 0
 
+    NULL_CURSOR = 0xFF
 
-def encode_varint(number):
+    # This corresponds to the following operations:
     """
-    Encode an integer as a varint.
-
-    Args:
-        number (int): The number to encode (must be non-negative)
-
-    Returns:
-        bytes: The encoded varint as bytes
-
-    Raises:
-        ValueError: If the number is negative
+    READ (bit index 3 from the right)
+    WRITE (bit index 4 from the right)
+    CREATE (bit index 5 from the right)
+    DELETE (bit index 6 from the right)
+    ALTER (bit index 7 from the right)
+    DESCRIBE (bit index 8 from the right)
+    DESCRIBE_CONFIGS (bit index 10 from the right)
+    ALTER_CONFIGS (bit index 11 from the right)
     """
-    if number < 0:
-        raise ValueError("Varint encoding only supports non-negative numbers")
+    TOPIC_AUTHORIZED_OPERATIONS = 0b0000_1101_1111_1000
 
-    encoded = bytearray()
-
-    while True:
-        # Get the least significant 7 bits
-        byte = number & 0x7F
-
-        # Right shift the number by 7 bits
-        number >>= 7
-
-        # If there are more bits to encode, set the MSB to 1
-        if number:
-            byte |= 0x80
-
-        encoded.append(byte)
-
-        if not number:
-            break
-
-    return bytes(encoded)
+    class ErrorCodes:
+        UNKNOWN_TOPIC = 3

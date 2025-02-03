@@ -1,6 +1,7 @@
 import asyncio
 
 from app.kafka import ApiVersions, DescribeTopicPartitions, KafkaMessage
+from app.utils import NULL_BYTE, encode_varint
 
 
 UNSUPPORTED_VERSION = 35
@@ -48,6 +49,7 @@ def _handle_api_versions_request(
 
 
 def _handle_describe_topic_partitions_request(request_body: bytes) -> bytes:
+    # Parse request body
     client_id_length = int.from_bytes(request_body[:2])
     offset = 2 + client_id_length
     _client_id = request_body[2 : 2 + client_id_length].decode()
@@ -59,11 +61,12 @@ def _handle_describe_topic_partitions_request(request_body: bytes) -> bytes:
     offset += 1
 
     topic_name_length = request_body[offset]
-    topic_name = request_body[offset + 1 : offset + topic_name_length]
+    topic_name = request_body[offset + 1 : offset + topic_name_length].decode()
 
-    error_code = 3  # UNKNOWN_TOPIC
+    # Build response body
+    error_code = DescribeTopicPartitions.ErrorCodes.UNKNOWN_TOPIC
     # INT32
-    throttle_time_ms = int(0).to_bytes(length=4)
+    throttle_time_ms = 0
 
     # UUID
     topic_id = (
@@ -71,41 +74,27 @@ def _handle_describe_topic_partitions_request(request_body: bytes) -> bytes:
     )
 
     # False
-    is_internal = b"\x00"
+    is_internal = NULL_BYTE
 
     # Varint - empty array
-    partitions_array_length = int(1).to_bytes(length=1)
+    partitions_array_length = encode_varint(1)
 
-    # This corresponds to the following operations:
-    """
-    READ (bit index 3 from the right)
-    WRITE (bit index 4 from the right)
-    CREATE (bit index 5 from the right)
-    DELETE (bit index 6 from the right)
-    ALTER (bit index 7 from the right)
-    DESCRIBE (bit index 8 from the right)
-    DESCRIBE_CONFIGS (bit index 10 from the right)
-    ALTER_CONFIGS (bit index 11 from the right)
-    """
-    topic_authorized_operations = 0b0000_1101_1111_1000
+    topic_authorized_operations = DescribeTopicPartitions.TOPIC_AUTHORIZED_OPERATIONS
 
-    next_cursor = 0xFF
-
-    body = (
-        throttle_time_ms
-        + int(2).to_bytes(length=1)  # varint length of topics
+    return (
+        throttle_time_ms.to_bytes(length=4)  # INT32
+        + encode_varint(2)  # varint topic length
         + error_code.to_bytes(length=2)  # INT16
-        + (len(topic_name) + 1).to_bytes(length=1)  # Varint length of topic name
-        + topic_name
+        + encode_varint(len(topic_name) + 1)
+        + topic_name.encode()
         + int(topic_id.replace("-", "")).to_bytes(length=16)  # UUID
         + is_internal
         + partitions_array_length
-        + topic_authorized_operations.to_bytes(length=4)
-        + b"\x00"
-        + next_cursor.to_bytes(length=1)
-        + b"\x00"
+        + topic_authorized_operations.to_bytes(length=4)  # 4-byte bitfield
+        + NULL_BYTE
+        + DescribeTopicPartitions.NULL_CURSOR.to_bytes(length=1)
+        + NULL_BYTE
     )
-    return body
 
 
 def _handle_request(request: bytes):
