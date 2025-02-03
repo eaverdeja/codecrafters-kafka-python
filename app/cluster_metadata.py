@@ -175,7 +175,7 @@ class ClusterMetadata:
                         value.partition_id = int.from_bytes(reader.read_bytes(4))
                         value.topic_uuid = to_uuid(reader.read_bytes(16))
                         # Leap of faith - skip to leader info
-                        # There are varints in here, so this a best guess
+                        # There are varints in here, so this is a best guess
                         reader.skip(1 + 4 + 1 + 4 + 1 + 1)
                         value.leader_id = int.from_bytes(reader.read_bytes(4))
                         value.leader_epoch = int.from_bytes(reader.read_bytes(4))
