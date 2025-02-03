@@ -1,10 +1,13 @@
 import asyncio
 
+from app.kafka import ApiVersions, DescribeTopicPartitions, KafkaMessage
+
+
 UNSUPPORTED_VERSION = 35
 SUPPORTED_API_VERSIONS = [0, 1, 2, 3, 4]
 
 
-def _handle_request(request):
+def _handle_request(request: bytes):
     # Request Header v2
     # https://kafka.apache.org/protocol.html#protocol_messages
     # First 4 bytes are the message size
@@ -32,26 +35,16 @@ def _handle_request(request):
     # INT32
     header = correlation_id.to_bytes(length=4)
 
-    # Response body
-    # https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
-    """
-    ApiVersions Response (Version: 3/4) => error_code [api_keys] throttle_time_ms TAG_BUFFER 
-    error_code => INT16
-    api_keys => api_key min_version max_version TAG_BUFFER 
-        api_key => INT16
-        min_version => INT16
-        max_version => INT16
-    throttle_time_ms => INT32
-    """
+    # Messages we support
+    messages: list[type[KafkaMessage]] = [
+        ApiVersions,
+        DescribeTopicPartitions,
+    ]
 
     # Compact arrays use N + 1 for their length,
-    # so for a single key (N == 1) we need length 2
-    num_api_keys = int(2).to_bytes(length=1)
+    # for ex., for a single key (N == 1) we need length 2
+    num_api_keys = int(len(messages) + 1).to_bytes(length=1)
 
-    # INT16
-    min_version = min(SUPPORTED_API_VERSIONS).to_bytes(length=2)
-    # INT16
-    max_version = max(SUPPORTED_API_VERSIONS).to_bytes(length=2)
     # INT16
     error_code = (
         UNSUPPORTED_VERSION if request_api_version not in SUPPORTED_API_VERSIONS else 0
@@ -59,18 +52,19 @@ def _handle_request(request):
 
     # INT32
     throttle_time_ms = int(0).to_bytes(length=4)
+    # Null byte
     tag_buffer = b"\x00"
 
-    body = (
-        error_code
-        + num_api_keys
-        + (18).to_bytes(length=2)
-        + min_version
-        + max_version
-        + tag_buffer
-        + throttle_time_ms
-        + tag_buffer
-    )
+    # Response body
+    body = error_code + num_api_keys
+
+    for message in messages:
+        body += message.API_KEY.to_bytes(length=2)
+        body += message.MIN_VERSION.to_bytes(length=2)
+        body += message.MAX_VERSION.to_bytes(length=2)
+        body += tag_buffer
+
+    body += throttle_time_ms + tag_buffer
 
     length = (len(header) + len(body)).to_bytes(length=4)
     response = length + header + body
