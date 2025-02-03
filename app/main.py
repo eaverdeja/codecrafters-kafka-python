@@ -1,4 +1,4 @@
-import socket
+import asyncio
 
 UNSUPPORTED_VERSION = 35
 SUPPORTED_API_VERSIONS = [0, 1, 2, 3, 4]
@@ -77,30 +77,41 @@ def _handle_request(request):
     return response
 
 
-def _process_connection(conn: socket.SocketType):
+async def _process_connection(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+):
     try:
-        while True:
-            request = conn.recv(512)
+        while request := await reader.read(512):
             response = _handle_request(request)
-            conn.send(response)
+            writer.write(response)
+            await writer.drain()
     except Exception as e:
         print(f"Error processing connection: {e}")
         raise e
     finally:
-        conn.close()
+        writer.close()
+        await writer.wait_closed()
+
+
+async def _run_server():
+    server = await asyncio.start_server(
+        _process_connection, host="localhost", port=9092
+    )
+
+    try:
+        await server.serve_forever()
+    except asyncio.CancelledError:
+        print("Shutting down server")
+    finally:
+        server.close()
+        await server.wait_closed()
 
 
 def main():
-    server = socket.create_server(("localhost", 9092), reuse_port=True)
-
     try:
-        while True:
-            conn, _ = server.accept()
-            _process_connection(conn)
+        asyncio.run(_run_server())
     except KeyboardInterrupt:
         print("Shutting down broker...")
-    finally:
-        server.close()
 
 
 if __name__ == "__main__":
