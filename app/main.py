@@ -8,7 +8,7 @@ from app.cluster_metadata import (
 )
 from app.messages import ApiVersions, DescribeTopicPartitions, Fetch, KafkaMessage
 from app.utils import NULL_BYTE, encode_varint
-from app.uuid import from_uuid
+from app.uuid import from_uuid, to_uuid
 
 
 UNSUPPORTED_VERSION = 35
@@ -118,6 +118,7 @@ def _handle_describe_topic_partitions_request(request_body: bytes) -> bytes:
         )
 
         # Topic ID
+        print(request_body)
         default_topic_id = (
             "00000000-0000-0000-0000-00000000000000000000-0000-0000-0000-000000000000"
         )
@@ -164,21 +165,41 @@ def _handle_describe_topic_partitions_request(request_body: bytes) -> bytes:
 
 
 def _handle_fetch_request(request_body: bytes) -> bytes:
+    print(" ".join(f"{b:02x}" for b in request_body))
+
+    max_wait_ms = int.from_bytes(request_body[:4])
+    min_bytes = int.from_bytes(request_body[4:8])
+    max_bytes = int.from_bytes(request_body[8:12])
+    isolation_level = int.from_bytes(request_body[12:13])
+    session_id = int.from_bytes(request_body[13:17])
+    session_epoch = int.from_bytes(request_body[17:21])
+    num_of_topics = int.from_bytes(request_body[21:22])
+    topic_id = to_uuid(request_body[22:38])
+    partitions_length = int.from_bytes(request_body[38:39])
+    partitions_index = int.from_bytes(request_body[39:43])
+
     # INT32
     throttle_time_ms = 0
-
     # INT16
     error_code = 0
 
-    # INT32
-    session_id = 1
+    responses: list[bytes] = [
+        (
+            from_uuid(topic_id)
+            + encode_varint(partitions_length)
+            + partitions_index.to_bytes(length=4)
+            + int(100).to_bytes(length=2)
+            + NULL_BYTE
+            + NULL_BYTE
+        )
+    ]
 
     return (
         throttle_time_ms.to_bytes(length=4)
         + error_code.to_bytes(length=2)
         + session_id.to_bytes(length=4)
-        + encode_varint(1)  # N+1 length of responses array
-        + NULL_BYTE  # End of responses array
+        + encode_varint(len(responses) + 1)
+        + b"".join(responses)
         + NULL_BYTE  # End of response body
     )
 
@@ -206,7 +227,6 @@ def _handle_request(request: bytes):
     # Response Header v0
     # https://kafka.apache.org/protocol.html#protocol_messages
     # INT32
-
     header = correlation_id.to_bytes(length=4)
     if request_api_key == ApiVersions.API_KEY:
         body = _handle_api_versions_request(request_body, request_api_version)
@@ -214,6 +234,18 @@ def _handle_request(request: bytes):
         header += NULL_BYTE
         body = _handle_describe_topic_partitions_request(request_body)
     elif request_api_key == Fetch.API_KEY:
+        client_id_length = int.from_bytes(request[12:14])
+        offset = 14
+        client_id = request[offset : offset + client_id_length].decode()
+        assert (
+            client_id == "kafka-cli"
+        ), f"Expected client_id to be kafka-cli, got {client_id}"
+        assert (
+            request[offset + client_id_length + 1] == 0
+        ), f"Expected null byte, got {request[offset + client_id_length + 1]}"
+
+        offset += client_id_length + 1
+        request_body = request[offset : offset + message_size]
         body = _handle_fetch_request(request_body)
     else:
         raise Exception(f"Unsupported API key: {request_api_key}")
