@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field, fields
 
 from app.uuid import to_uuid
-from app.binary_reader import BinaryFileReader
+from app.binary_reader import BinaryReader
 
 
 @dataclass
@@ -94,7 +94,7 @@ class ClusterMetadata:
 
     @classmethod
     def parse(cls) -> list[RecordBatch]:
-        with BinaryFileReader(cls.FILE_PATH) as reader:
+        with BinaryReader(cls.FILE_PATH) as reader:
             batches: list[RecordBatch] = []
             while True:
                 reader.rewind()

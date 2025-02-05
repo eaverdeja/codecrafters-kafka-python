@@ -1,7 +1,17 @@
-class BinaryFileReader:
-    def __init__(self, filename):
-        """Initialize the binary file reader with a filename."""
-        self.file = open(filename, "rb")
+from io import BufferedReader, BytesIO
+
+
+class BinaryReader:
+    stream: BufferedReader | BytesIO
+
+    def __init__(self, filename: str | None = None, raw_data: bytes | None = None):
+        if filename:
+            self.stream = open(filename, "rb")
+        elif raw_data:
+            self.stream = BytesIO(raw_data)
+        else:
+            raise Exception("Expected filename or raw data")
+
         self.position = 0
 
     def seek(self, offset, whence=0):
@@ -10,16 +20,16 @@ class BinaryFileReader:
         whence: 0 (start), 1 (current), 2 (end)
         Returns new absolute position
         """
-        self.position = self.file.seek(offset, whence)
+        self.position = self.stream.seek(offset, whence)
         return self.position
 
     def tell(self):
         """Return current cursor position"""
-        return self.file.tell()
+        return self.stream.tell()
 
     def read_bytes(self, size):
         """Read specified number of bytes from current position"""
-        data = self.file.read(size)
+        data = self.stream.read(size)
         self.position += len(data)
         return data
 
@@ -73,4 +83,4 @@ class BinaryFileReader:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.file.close()
+        self.stream.close()

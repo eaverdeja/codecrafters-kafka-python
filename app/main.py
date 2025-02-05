@@ -1,6 +1,7 @@
 import asyncio
 from itertools import zip_longest
 
+from app.binary_reader import BinaryReader
 from app.cluster_metadata import (
     ClusterMetadata,
     PartitionRecord,
@@ -118,7 +119,6 @@ def _handle_describe_topic_partitions_request(request_body: bytes) -> bytes:
         )
 
         # Topic ID
-        print(request_body)
         default_topic_id = (
             "00000000-0000-0000-0000-00000000000000000000-0000-0000-0000-000000000000"
         )
@@ -165,36 +165,34 @@ def _handle_describe_topic_partitions_request(request_body: bytes) -> bytes:
 
 
 def _handle_fetch_request(request_body: bytes) -> bytes:
-    print(" ".join(f"{b:02x}" for b in request_body))
+    reader = BinaryReader(raw_data=request_body)
 
-    _max_wait_ms = int.from_bytes(request_body[:4])
-    _min_bytes = int.from_bytes(request_body[4:8])
-    _max_bytes = int.from_bytes(request_body[8:12])
-    _isolation_level = int.from_bytes(request_body[12:13])
-    session_id = int.from_bytes(request_body[13:17])
-    _session_epoch = int.from_bytes(request_body[17:21])
-    # Unsigned varint - assume a single byte
-    num_of_topics = int.from_bytes(request_body[21:22]) - 1
+    _max_wait_ms = int.from_bytes(reader.read_bytes(4))
+    _min_bytes = int.from_bytes(reader.read_bytes(4))
+    _max_bytes = int.from_bytes(reader.read_bytes(4))
+    _isolation_level = int.from_bytes(reader.read_bytes(1))
+    session_id = int.from_bytes(reader.read_bytes(4))
+    _session_epoch = int.from_bytes(reader.read_bytes(4))
+    num_of_topics = reader.read_varint()[0] - 1
 
     responses: list[bytes] = []
     for _ in range(num_of_topics):
-        topic_id = to_uuid(request_body[22:38])
-        # Unsigned varint - assume a single byte
-        partitions_length = int.from_bytes(request_body[38:39]) - 1
-        partitions_index = int.from_bytes(request_body[39:43])
+        topic_id = to_uuid(reader.read_bytes(16))
+        partitions_length = reader.read_varint()[0] - 1
+        partitions_index = int.from_bytes(reader.read_bytes(4))
 
         responses.append(
             from_uuid(topic_id)
             + encode_varint(partitions_length + 1)
             + partitions_index.to_bytes(length=4)
-            + int(100).to_bytes(length=2)  # error code
+            + int(100).to_bytes(length=2)  # error code UNKNOWN_TOPIC
             + int(0).to_bytes(length=8)  # high watermark
             + int(0).to_bytes(length=8)  # last stable offset
             + int(0).to_bytes(length=8)  # log start offset
             + int(0).to_bytes(length=1)  # num aborted transactions
             + int(0).to_bytes(length=4)  # preferred read replica
             + int(0).to_bytes(length=1)  # compact records length
-            + NULL_BYTE  # end of partitions
+            + NULL_BYTE  # end of Partitions array
             + NULL_BYTE  # End of responses array
         )
 
@@ -207,7 +205,6 @@ def _handle_fetch_request(request_body: bytes) -> bytes:
         throttle_time_ms.to_bytes(length=4)
         + error_code.to_bytes(length=2)
         + session_id.to_bytes(length=4)
-        + NULL_BYTE  # why is this tag buffer needed? The docs don't specify it
         + encode_varint(len(responses) + 1)
         + b"".join(responses)
         + NULL_BYTE  # End of response body
@@ -241,18 +238,24 @@ def _handle_request(request: bytes):
     if request_api_key == ApiVersions.API_KEY:
         body = _handle_api_versions_request(request_body, request_api_version)
     elif request_api_key == DescribeTopicPartitions.API_KEY:
+        # Response Header v1 includes a tag buffer
         header += NULL_BYTE
         body = _handle_describe_topic_partitions_request(request_body)
     elif request_api_key == Fetch.API_KEY:
+        # Response Header v1 includes a tag buffer
+        header += NULL_BYTE
+
+        # Request Header v2 includes the client_id before the request body
         client_id_length = int.from_bytes(request[12:14])
         offset = 14
-        client_id = request[offset : offset + client_id_length].decode()
+        _client_id = request[offset : offset + client_id_length].decode()
         assert (
             request[offset + client_id_length + 1] == 0
         ), f"Expected null byte, got {request[offset + client_id_length + 1]}"
 
         offset += client_id_length + 1
         request_body = request[offset : offset + message_size]
+
         body = _handle_fetch_request(request_body)
     else:
         raise Exception(f"Unsupported API key: {request_api_key}")
