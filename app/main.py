@@ -167,37 +167,47 @@ def _handle_describe_topic_partitions_request(request_body: bytes) -> bytes:
 def _handle_fetch_request(request_body: bytes) -> bytes:
     print(" ".join(f"{b:02x}" for b in request_body))
 
-    max_wait_ms = int.from_bytes(request_body[:4])
-    min_bytes = int.from_bytes(request_body[4:8])
-    max_bytes = int.from_bytes(request_body[8:12])
-    isolation_level = int.from_bytes(request_body[12:13])
+    _max_wait_ms = int.from_bytes(request_body[:4])
+    _min_bytes = int.from_bytes(request_body[4:8])
+    _max_bytes = int.from_bytes(request_body[8:12])
+    _isolation_level = int.from_bytes(request_body[12:13])
     session_id = int.from_bytes(request_body[13:17])
-    session_epoch = int.from_bytes(request_body[17:21])
-    num_of_topics = int.from_bytes(request_body[21:22])
-    topic_id = to_uuid(request_body[22:38])
-    partitions_length = int.from_bytes(request_body[38:39])
-    partitions_index = int.from_bytes(request_body[39:43])
+    _session_epoch = int.from_bytes(request_body[17:21])
+    # Unsigned varint - assume a single byte
+    num_of_topics = int.from_bytes(request_body[21:22]) - 1
+
+    responses: list[bytes] = []
+    for _ in range(num_of_topics):
+        topic_id = to_uuid(request_body[22:38])
+        # Unsigned varint - assume a single byte
+        partitions_length = int.from_bytes(request_body[38:39]) - 1
+        partitions_index = int.from_bytes(request_body[39:43])
+
+        responses.append(
+            from_uuid(topic_id)
+            + encode_varint(partitions_length + 1)
+            + partitions_index.to_bytes(length=4)
+            + int(100).to_bytes(length=2)  # error code
+            + int(0).to_bytes(length=8)  # high watermark
+            + int(0).to_bytes(length=8)  # last stable offset
+            + int(0).to_bytes(length=8)  # log start offset
+            + int(0).to_bytes(length=1)  # num aborted transactions
+            + int(0).to_bytes(length=4)  # preferred read replica
+            + int(0).to_bytes(length=1)  # compact records length
+            + NULL_BYTE  # end of partitions
+            + NULL_BYTE  # End of responses array
+        )
 
     # INT32
     throttle_time_ms = 0
     # INT16
     error_code = 0
 
-    responses: list[bytes] = [
-        (
-            from_uuid(topic_id)
-            + encode_varint(partitions_length)
-            + partitions_index.to_bytes(length=4)
-            + int(100).to_bytes(length=2)
-            + NULL_BYTE
-            + NULL_BYTE
-        )
-    ]
-
     return (
         throttle_time_ms.to_bytes(length=4)
         + error_code.to_bytes(length=2)
         + session_id.to_bytes(length=4)
+        + NULL_BYTE  # why is this tag buffer needed? The docs don't specify it
         + encode_varint(len(responses) + 1)
         + b"".join(responses)
         + NULL_BYTE  # End of response body
@@ -237,9 +247,6 @@ def _handle_request(request: bytes):
         client_id_length = int.from_bytes(request[12:14])
         offset = 14
         client_id = request[offset : offset + client_id_length].decode()
-        assert (
-            client_id == "kafka-cli"
-        ), f"Expected client_id to be kafka-cli, got {client_id}"
         assert (
             request[offset + client_id_length + 1] == 0
         ), f"Expected null byte, got {request[offset + client_id_length + 1]}"
