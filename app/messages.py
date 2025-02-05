@@ -99,3 +99,7 @@ class Fetch(KafkaMessage):
     API_KEY = 1
     MIN_VERSION = 0
     MAX_VERSION = 16
+
+    class ErrorCodes:
+        NO_ERROR = 0
+        UNKNOWN_TOPIC = 100

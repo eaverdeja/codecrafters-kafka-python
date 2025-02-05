@@ -175,17 +175,35 @@ def _handle_fetch_request(request_body: bytes) -> bytes:
     _session_epoch = int.from_bytes(reader.read_bytes(4))
     num_of_topics = reader.read_varint()[0] - 1
 
+    cluster_metadata = ClusterMetadata.parse()
+
     responses: list[bytes] = []
     for _ in range(num_of_topics):
         topic_id = to_uuid(reader.read_bytes(16))
         partitions_length = reader.read_varint()[0] - 1
         partitions_index = int.from_bytes(reader.read_bytes(4))
 
+        topic_record = next(
+            (
+                record.value
+                for batch in cluster_metadata
+                for record in batch.records
+                if isinstance(record.value, TopicRecord)
+                and record.value.type == TopicRecord.TYPE
+                and record.value.topic_uuid == topic_id
+            ),
+            None,
+        )
+        error_code = (
+            Fetch.ErrorCodes.NO_ERROR
+            if topic_record
+            else Fetch.ErrorCodes.UNKNOWN_TOPIC
+        )
         responses.append(
             from_uuid(topic_id)
             + encode_varint(partitions_length + 1)
             + partitions_index.to_bytes(length=4)
-            + int(100).to_bytes(length=2)  # error code UNKNOWN_TOPIC
+            + int(error_code).to_bytes(length=2)  # error code UNKNOWN_TOPIC
             + int(0).to_bytes(length=8)  # high watermark
             + int(0).to_bytes(length=8)  # last stable offset
             + int(0).to_bytes(length=8)  # log start offset
