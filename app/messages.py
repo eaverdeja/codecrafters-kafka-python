@@ -6,8 +6,7 @@ from app.binary_writer import BinaryWriter
 from app.cluster_metadata import ClusterMetadata, PartitionRecord, TopicRecord
 from app.constants import NULL_BYTE
 from app.topic_data import TopicData
-from app.uuid import from_uuid, to_uuid
-from app.varint import encode_varint
+from app.uuid import to_uuid
 
 
 class KafkaMessage(ABC):
