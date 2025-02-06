@@ -2,6 +2,7 @@ from abc import ABC
 from itertools import zip_longest
 
 from app.binary_reader import BinaryReader
+from app.binary_writer import BinaryWriter
 from app.cluster_metadata import ClusterMetadata, PartitionRecord, TopicRecord
 from app.constants import NULL_BYTE
 from app.topic_data import TopicData
@@ -51,40 +52,37 @@ class ApiVersions(KafkaMessage):
             _client_id = reader.read_bytes(client_id_length).decode()
 
         # Messages we support
-        messages: list[type[KafkaMessage]] = [
+        message_types: list[type[KafkaMessage]] = [
             ApiVersions,
             DescribeTopicPartitions,
             Fetch,
         ]
 
-        # Compact arrays use N + 1 for their length,
-        # for ex., for a single key (N == 1) we need length 2
-        num_api_keys = int(len(messages) + 1).to_bytes(length=1)
-
-        # INT16
         error_code = (
             self.UNSUPPORTED_VERSION
             if self.request_api_version not in self.SUPPORTED_API_VERSIONS
             else 0
-        ).to_bytes(length=2)
+        )
 
-        # INT32
-        throttle_time_ms = int(0).to_bytes(length=4)
-        # An empty tagged field array, represented by a single byte of value 0x00
-        tag_buffer = b"\x00"
+        throttle_time_ms = 0
 
-        # Response body
-        body = error_code + num_api_keys
+        writer = BinaryWriter()
 
-        for message in messages:
-            body += message.API_KEY.to_bytes(length=2)
-            body += message.MIN_VERSION.to_bytes(length=2)
-            body += message.MAX_VERSION.to_bytes(length=2)
-            body += tag_buffer
-
-        body += throttle_time_ms + tag_buffer
-
-        return body
+        messages = [
+            (
+                writer.write_int16(message.API_KEY)
+                + writer.write_int16(message.MIN_VERSION)
+                + writer.write_int16(message.MAX_VERSION)
+                + NULL_BYTE
+            )
+            for message in message_types
+        ]
+        return (
+            writer.write_int16(error_code)
+            + writer.write_compact_array(messages)
+            + writer.write_int32(throttle_time_ms)
+            + NULL_BYTE
+        )
 
 
 class DescribeTopicPartitions(KafkaMessage):
