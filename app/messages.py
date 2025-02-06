@@ -186,18 +186,19 @@ class DescribeTopicPartitions(KafkaMessage):
                 and topic_record
                 and record.value.topic_uuid == topic_record.topic_uuid
             ]
+            writer = BinaryWriter()
             partitions = [
                 (
-                    int.to_bytes(DescribeTopicPartitions.ErrorCodes.NO_ERROR, length=2)
-                    + int.to_bytes(partition.partition_id, length=4)
-                    + int.to_bytes(partition.leader_id, length=4)
-                    + int.to_bytes(partition.leader_epoch, length=4)
+                    writer.write_int16(DescribeTopicPartitions.ErrorCodes.NO_ERROR)
+                    + writer.write_int32(partition.partition_id)
+                    + writer.write_int32(partition.leader_id)
+                    + writer.write_int32(partition.leader_epoch)
                     # I'm lazy, so the rest are just mocks of empty arrays
-                    + int.to_bytes(1, length=1)  # Replica nodes
-                    + int.to_bytes(1, length=1)  # In-sync replicas (ISR)
-                    + int.to_bytes(1, length=1)  # Eligible leader replicas (ELR)
-                    + int.to_bytes(1, length=1)  # Last known ELR
-                    + int.to_bytes(1, length=1)  # Offline replicas
+                    + writer.write_compact_array([])  # Replica nodes
+                    + writer.write_compact_array([])  # In-sync replicas (ISR)
+                    + writer.write_compact_array([])  # Eligible leader replicas (ELR)
+                    + writer.write_compact_array([])  # Last known ELR
+                    + writer.write_compact_array([])  # Offline replicas
                     + NULL_BYTE
                 )
                 for partition in partition_records
@@ -210,45 +211,36 @@ class DescribeTopicPartitions(KafkaMessage):
             )
 
             # Topic ID
-            default_topic_id = "00000000-0000-0000-0000-00000000000000000000-0000-0000-0000-000000000000"
+            default_topic_id = "00000000-0000-0000-0000-000000000000"
 
             # False
             is_internal = NULL_BYTE
 
-            # Varint
-            partitions_array_length = encode_varint(len(partitions) + 1)
-
-            topic_authorized_operations = (
-                DescribeTopicPartitions.TOPIC_AUTHORIZED_OPERATIONS
-            )
-
             topic_name = topic_record.topic_name if topic_record else topic_name
             topic_id = (
-                from_uuid(topic_record.topic_uuid)
+                writer.write_uuid(topic_record.topic_uuid)
                 if topic_record
-                else int(default_topic_id.replace("-", "")).to_bytes(length=16)
+                else writer.write_uuid(default_topic_id)
             )
             topic_values.append(
-                error_code.to_bytes(length=2)  # INT16
-                + encode_varint(len(topic_name) + 1)
-                + topic_name.encode()
+                writer.write_int16(error_code)
+                + writer.write_compact_string(topic_name)
                 + topic_id
                 + is_internal
-                + partitions_array_length
-                + b"".join(partitions)
-                + topic_authorized_operations.to_bytes(length=4)  # 4-byte bitfield
+                + writer.write_compact_array(partitions)
+                + writer.write_int32(
+                    DescribeTopicPartitions.TOPIC_AUTHORIZED_OPERATIONS
+                )  # 4-byte bitfield
                 + NULL_BYTE
             )
 
-        # INT32
         throttle_time_ms = 0
 
         return (
-            throttle_time_ms.to_bytes(length=4)  # INT32
-            + encode_varint(len(topic_values) + 1)
-            + b"".join(topic_values)
+            writer.write_int32(throttle_time_ms)
+            + writer.write_compact_array(topic_values)
             # Cursor used for pagination
-            + DescribeTopicPartitions.NULL_CURSOR.to_bytes(length=1)
+            + writer.write_byte(DescribeTopicPartitions.NULL_CURSOR)
             + NULL_BYTE
         )
 
@@ -267,12 +259,12 @@ class Fetch(KafkaMessage):
         topics => topic_id [partitions] TAG_BUFFER
             topic_id => UUID
             partitions => partition current_leader_epoch fetch_offset last_fetched_epoch log_start_offset partition_max_bytes TAG_BUFFER
-            partition => INT32
-            current_leader_epoch => INT32
-            fetch_offset => INT64
-            last_fetched_epoch => INT32
-            log_start_offset => INT64
-            partition_max_bytes => INT32
+                partition => INT32
+                current_leader_epoch => INT32
+                fetch_offset => INT64
+                last_fetched_epoch => INT32
+                log_start_offset => INT64
+                partition_max_bytes => INT32
         forgotten_topics_data => topic_id [partitions] TAG_BUFFER
             topic_id => UUID
             partitions => INT32
@@ -306,6 +298,8 @@ class Fetch(KafkaMessage):
         UNKNOWN_TOPIC = 100
 
     def handle_request(self, request_body: bytes) -> bytes:
+        writer = BinaryWriter()
+
         with BinaryReader(raw_data=request_body) as reader:
             _max_wait_ms = int.from_bytes(reader.read_bytes(4))
             _min_bytes = int.from_bytes(reader.read_bytes(4))
@@ -349,33 +343,34 @@ class Fetch(KafkaMessage):
                     if topic_record
                     else Fetch.ErrorCodes.UNKNOWN_TOPIC
                 )
+                partitions = [
+                    (
+                        writer.write_int32(partitions_index)
+                        + writer.write_int16(error_code)
+                        + writer.write_int64(0)  # high watermark
+                        + writer.write_int64(0)  # last stable offset
+                        + writer.write_int64(0)  # log start offset
+                        + writer.write_byte(0)  # num aborted transactions
+                        + writer.write_int32(0)  # preferred read replica
+                        + writer.write_records(topic_data)
+                        + NULL_BYTE
+                    )
+                    for _ in range(partitions_length)
+                ]
+
                 responses.append(
-                    from_uuid(topic_id)
-                    + encode_varint(partitions_length + 1)
-                    + partitions_index.to_bytes(length=4)
-                    + int(error_code).to_bytes(length=2)  # error code UNKNOWN_TOPIC
-                    + int(0).to_bytes(length=8)  # high watermark
-                    + int(0).to_bytes(length=8)  # last stable offset
-                    + int(0).to_bytes(length=8)  # log start offset
-                    + int(0).to_bytes(length=1)  # num aborted transactions
-                    + int(0).to_bytes(length=4)  # preferred read replica
-                    + encode_varint(len(topic_data) + 1)
-                    + topic_data
-                    # Topic metadata already has a NULL BYTE marking its end
-                    + NULL_BYTE  # End of Partitions array
-                    + NULL_BYTE  # End of responses array
+                    writer.write_uuid(topic_id)
+                    + writer.write_compact_array(partitions)
+                    + NULL_BYTE
                 )
 
-        # INT32
         throttle_time_ms = 0
-        # INT16
-        error_code = 0
+        error_code = self.ErrorCodes.NO_ERROR
 
         return (
-            throttle_time_ms.to_bytes(length=4)
-            + error_code.to_bytes(length=2)
-            + session_id.to_bytes(length=4)
-            + encode_varint(len(responses) + 1)
-            + b"".join(responses)
-            + NULL_BYTE  # End of response body
+            writer.write_int32(throttle_time_ms)
+            + writer.write_int16(error_code)
+            + writer.write_int32(session_id)
+            + writer.write_compact_array(responses)
+            + NULL_BYTE
         )

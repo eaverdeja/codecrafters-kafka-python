@@ -3,6 +3,7 @@ import traceback
 
 
 from app.binary_reader import BinaryReader
+from app.binary_writer import BinaryWriter
 from app.constants import NULL_BYTE
 from app.messages import ApiVersions, DescribeTopicPartitions, Fetch
 
@@ -30,8 +31,8 @@ def _handle_request(request: bytes):
 
     # Response Header v0
     # https://kafka.apache.org/protocol.html#protocol_messages
-    # INT32
-    header = correlation_id.to_bytes(length=4)
+    writer = BinaryWriter()
+    header = writer.write_int32(correlation_id)
 
     message: ApiVersions | DescribeTopicPartitions | Fetch
     match request_api_key:
@@ -60,7 +61,7 @@ def _handle_request(request: bytes):
 
     body = message.handle_request(request_body)
 
-    length = (len(header) + len(body)).to_bytes(length=4)
+    length = writer.write_int32(len(header) + len(body))
     response = length + header + body
     return response
 
