@@ -1,6 +1,3 @@
-NULL_BYTE = b"\x00"
-
-
 def encode_varint(number):
     """
     Encode an integer as a varint.
