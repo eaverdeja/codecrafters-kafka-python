@@ -2,34 +2,37 @@ import asyncio
 import traceback
 
 
+from app.binary_reader import BinaryReader
 from app.constants import NULL_BYTE
 from app.messages import ApiVersions, DescribeTopicPartitions, Fetch
 
 
 def _handle_request(request: bytes):
-    # Request Header v2
-    # https://kafka.apache.org/protocol.html#protocol_messages
-    # First 4 bytes are the message size
-    message_size = int.from_bytes(request[:4])
+    with BinaryReader(raw_data=request) as reader:
+        # Request Header v2
+        # https://kafka.apache.org/protocol.html#protocol_messages
+        # First 4 bytes are the message size
+        message_size = int.from_bytes(reader.read_bytes(4))
 
-    # Next 2 bytes are the request API key
-    # A Kafka request specifies the API its calling by using the request_api_key header field.
-    request_api_key = int.from_bytes(request[4:6])
+        # Next 2 bytes are the request API key
+        # A Kafka request specifies the API its calling by using the request_api_key header field.
+        request_api_key = int.from_bytes(reader.read_bytes(2))
 
-    # Next 2 bytes are the request API version
-    # Requests use the header field request_api_version to specify the API version being requested.
-    request_api_version = int.from_bytes(request[6:8])
+        # Next 2 bytes are the request API version
+        # Requests use the header field request_api_version to specify the API version being requested.
+        request_api_version = int.from_bytes(reader.read_bytes(2))
 
-    # Finally, the next 4 bytes are the correlation_id
-    # This field lets clients match responses to their original requests
-    correlation_id = int.from_bytes(request[8:12])
+        # Finally, the next 4 bytes are the correlation_id
+        # This field lets clients match responses to their original requests
+        correlation_id = int.from_bytes(reader.read_bytes(4))
 
-    request_body = request[12 : 12 + message_size]
+        request_body = reader.read_bytes(message_size)
 
     # Response Header v0
     # https://kafka.apache.org/protocol.html#protocol_messages
     # INT32
     header = correlation_id.to_bytes(length=4)
+
     message: ApiVersions | DescribeTopicPartitions | Fetch
     match request_api_key:
         case ApiVersions.API_KEY:
@@ -44,15 +47,12 @@ def _handle_request(request: bytes):
             header += NULL_BYTE
 
             # Request Header v2 includes the client_id before the request body
-            client_id_length = int.from_bytes(request[12:14])
-            offset = 14
-            _client_id = request[offset : offset + client_id_length].decode()
-            assert (
-                request[offset + client_id_length + 1] == 0
-            ), f"Expected null byte, got {request[offset + client_id_length + 1]}"
-
-            offset += client_id_length + 1
-            request_body = request[offset : offset + message_size]
+            with BinaryReader(raw_data=request_body) as reader:
+                client_id_length = int.from_bytes(reader.read_bytes(2))
+                _client_id = reader.read_bytes(client_id_length).decode()
+                tag_buffer = reader.read_bytes(1)
+                assert tag_buffer == NULL_BYTE, f"Expected null byte, got {tag_buffer}"
+                request_body = reader.read_bytes(message_size)
 
             message = Fetch()
         case _:

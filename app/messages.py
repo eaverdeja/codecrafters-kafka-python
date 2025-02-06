@@ -1,6 +1,5 @@
 from abc import ABC
 from itertools import zip_longest
-from typing import Any
 
 from app.binary_reader import BinaryReader
 from app.cluster_metadata import ClusterMetadata, PartitionRecord, TopicRecord
@@ -21,7 +20,7 @@ class KafkaMessage(ABC):
 
 class ApiVersions(KafkaMessage):
     """
-    # https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
+    https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
 
     ApiVersions Request (Version: 4) => client_software_name client_software_version TAG_BUFFER
         client_software_name => COMPACT_STRING
@@ -47,8 +46,9 @@ class ApiVersions(KafkaMessage):
         self.request_api_version = request_api_version
 
     def handle_request(self, request_body: bytes) -> bytes:
-        client_id_length = int.from_bytes(request_body[:2])
-        _client_id = request_body[2 : 2 + client_id_length].decode()
+        with BinaryReader(raw_data=request_body) as reader:
+            client_id_length = int.from_bytes(reader.read_bytes(2))
+            _client_id = reader.read_bytes(client_id_length).decode()
 
         # Messages we support
         messages: list[type[KafkaMessage]] = [
@@ -146,24 +146,23 @@ class DescribeTopicPartitions(KafkaMessage):
         UNKNOWN_TOPIC = 3
 
     def handle_request(self, request_body: bytes) -> bytes:
-        # Parse request body
-        client_id_length = int.from_bytes(request_body[:2])
-        offset = 2 + client_id_length
-        _client_id = request_body[2 : 2 + client_id_length].decode()
+        with BinaryReader(raw_data=request_body) as reader:
+            # Parse request body
+            client_id_length = int.from_bytes(reader.read_bytes(2))
+            _client_id = reader.read_bytes(client_id_length).decode()
 
-        _tag_buffer = request_body[offset]
-        offset += 1
+            tag_buffer = reader.read_bytes(1)
+            assert tag_buffer == NULL_BYTE, f"Expected null byte, got {tag_buffer}"
 
-        _array_length = request_body[offset]
-        offset += 1
+            _array_length = reader.read_bytes(1)
 
-        topics = []
-        while (topic_name_length := request_body[offset]) != 0x00:
-            topic_name = request_body[offset + 1 : offset + topic_name_length].decode()
-            offset += (
-                topic_name_length + 1
-            )  # +1 for the TAG_BUFFER in between topic names
-            topics.append(topic_name)
+            topics = []
+            while (topic_name_length := reader.read_bytes(1)) != NULL_BYTE:
+                topic_name_length = int.from_bytes(topic_name_length) - 1
+                topic_name = reader.read_bytes(topic_name_length).decode()
+                tag_buffer = reader.read_bytes(1)
+                assert tag_buffer == NULL_BYTE, f"Expected null byte, got {tag_buffer}"
+                topics.append(topic_name)
 
         # Build response body
 
@@ -258,7 +257,7 @@ class DescribeTopicPartitions(KafkaMessage):
 
 class Fetch(KafkaMessage):
     """
-    # https://kafka.apache.org/protocol.html#The_Messages_Fetch
+    https://kafka.apache.org/protocol.html#The_Messages_Fetch
 
     Fetch Request (Version: 16) => max_wait_ms min_bytes max_bytes isolation_level session_id session_epoch [topics] [forgotten_topics_data] rack_id TAG_BUFFER
         max_wait_ms => INT32
@@ -309,66 +308,65 @@ class Fetch(KafkaMessage):
         UNKNOWN_TOPIC = 100
 
     def handle_request(self, request_body: bytes) -> bytes:
-        reader = BinaryReader(raw_data=request_body)
+        with BinaryReader(raw_data=request_body) as reader:
+            _max_wait_ms = int.from_bytes(reader.read_bytes(4))
+            _min_bytes = int.from_bytes(reader.read_bytes(4))
+            _max_bytes = int.from_bytes(reader.read_bytes(4))
+            _isolation_level = int.from_bytes(reader.read_bytes(1))
+            session_id = int.from_bytes(reader.read_bytes(4))
+            _session_epoch = int.from_bytes(reader.read_bytes(4))
+            num_of_topics = reader.read_varint()[0] - 1
 
-        _max_wait_ms = int.from_bytes(reader.read_bytes(4))
-        _min_bytes = int.from_bytes(reader.read_bytes(4))
-        _max_bytes = int.from_bytes(reader.read_bytes(4))
-        _isolation_level = int.from_bytes(reader.read_bytes(1))
-        session_id = int.from_bytes(reader.read_bytes(4))
-        _session_epoch = int.from_bytes(reader.read_bytes(4))
-        num_of_topics = reader.read_varint()[0] - 1
+            cluster_metadata = ClusterMetadata.parse()
 
-        cluster_metadata = ClusterMetadata.parse()
+            responses: list[bytes] = []
+            for _ in range(num_of_topics):
+                topic_id = to_uuid(reader.read_bytes(16))
+                partitions_length = reader.read_varint()[0] - 1
+                partitions_index = int.from_bytes(reader.read_bytes(4))
 
-        responses: list[bytes] = []
-        for _ in range(num_of_topics):
-            topic_id = to_uuid(reader.read_bytes(16))
-            partitions_length = reader.read_varint()[0] - 1
-            partitions_index = int.from_bytes(reader.read_bytes(4))
+                topic_record = next(
+                    (
+                        record.value
+                        for batch in cluster_metadata
+                        for record in batch.records
+                        if isinstance(record.value, TopicRecord)
+                        and record.value.type == TopicRecord.TYPE
+                        and record.value.topic_uuid == topic_id
+                    ),
+                    None,
+                )
+                # Recover the associated log file using the topic name and
+                # the partition index from the request
+                topic_file = (
+                    f"/tmp/kraft-combined-logs/{topic_record.topic_name}-{partitions_index}/00000000000000000000.log"
+                    if topic_record
+                    else ""
+                )
+                # This will dump the whole file as is
+                topic_data = TopicData.dump(topic_file)
 
-            topic_record = next(
-                (
-                    record.value
-                    for batch in cluster_metadata
-                    for record in batch.records
-                    if isinstance(record.value, TopicRecord)
-                    and record.value.type == TopicRecord.TYPE
-                    and record.value.topic_uuid == topic_id
-                ),
-                None,
-            )
-            # Recover the associated log file using the topic name and
-            # the partition index from the request
-            topic_file = (
-                f"/tmp/kraft-combined-logs/{topic_record.topic_name}-{partitions_index}/00000000000000000000.log"
-                if topic_record
-                else ""
-            )
-            # This will dump the whole file as is
-            topic_data = TopicData.dump(topic_file)
-
-            error_code = (
-                Fetch.ErrorCodes.NO_ERROR
-                if topic_record
-                else Fetch.ErrorCodes.UNKNOWN_TOPIC
-            )
-            responses.append(
-                from_uuid(topic_id)
-                + encode_varint(partitions_length + 1)
-                + partitions_index.to_bytes(length=4)
-                + int(error_code).to_bytes(length=2)  # error code UNKNOWN_TOPIC
-                + int(0).to_bytes(length=8)  # high watermark
-                + int(0).to_bytes(length=8)  # last stable offset
-                + int(0).to_bytes(length=8)  # log start offset
-                + int(0).to_bytes(length=1)  # num aborted transactions
-                + int(0).to_bytes(length=4)  # preferred read replica
-                + encode_varint(len(topic_data) + 1)
-                + topic_data
-                # Topic metadata already has a NULL BYTE marking its end
-                + NULL_BYTE  # End of Partitions array
-                + NULL_BYTE  # End of responses array
-            )
+                error_code = (
+                    Fetch.ErrorCodes.NO_ERROR
+                    if topic_record
+                    else Fetch.ErrorCodes.UNKNOWN_TOPIC
+                )
+                responses.append(
+                    from_uuid(topic_id)
+                    + encode_varint(partitions_length + 1)
+                    + partitions_index.to_bytes(length=4)
+                    + int(error_code).to_bytes(length=2)  # error code UNKNOWN_TOPIC
+                    + int(0).to_bytes(length=8)  # high watermark
+                    + int(0).to_bytes(length=8)  # last stable offset
+                    + int(0).to_bytes(length=8)  # log start offset
+                    + int(0).to_bytes(length=1)  # num aborted transactions
+                    + int(0).to_bytes(length=4)  # preferred read replica
+                    + encode_varint(len(topic_data) + 1)
+                    + topic_data
+                    # Topic metadata already has a NULL BYTE marking its end
+                    + NULL_BYTE  # End of Partitions array
+                    + NULL_BYTE  # End of responses array
+                )
 
         # INT32
         throttle_time_ms = 0
