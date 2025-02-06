@@ -1,5 +1,7 @@
 import asyncio
 from itertools import zip_longest
+import traceback
+
 
 from app.binary_reader import BinaryReader
 from app.cluster_metadata import (
@@ -8,6 +10,7 @@ from app.cluster_metadata import (
     TopicRecord,
 )
 from app.messages import ApiVersions, DescribeTopicPartitions, Fetch, KafkaMessage
+from app.topic_data import TopicData
 from app.utils import NULL_BYTE, encode_varint
 from app.uuid import from_uuid, to_uuid
 
@@ -194,6 +197,16 @@ def _handle_fetch_request(request_body: bytes) -> bytes:
             ),
             None,
         )
+        # Recover the associated log file using the topic name and
+        # the partition index from the request
+        topic_file = (
+            f"/tmp/kraft-combined-logs/{topic_record.topic_name}-{partitions_index}/00000000000000000000.log"
+            if topic_record
+            else ""
+        )
+        # This will dump the whole file as is
+        topic_data = TopicData.dump(topic_file)
+
         error_code = (
             Fetch.ErrorCodes.NO_ERROR
             if topic_record
@@ -209,8 +222,10 @@ def _handle_fetch_request(request_body: bytes) -> bytes:
             + int(0).to_bytes(length=8)  # log start offset
             + int(0).to_bytes(length=1)  # num aborted transactions
             + int(0).to_bytes(length=4)  # preferred read replica
-            + int(0).to_bytes(length=1)  # compact records length
-            + NULL_BYTE  # end of Partitions array
+            + encode_varint(len(topic_data) + 1)
+            + topic_data
+            # Topic metadata already has a NULL BYTE marking its end
+            + NULL_BYTE  # End of Partitions array
             + NULL_BYTE  # End of responses array
         )
 
@@ -293,6 +308,7 @@ async def _process_connection(
             await writer.drain()
     except Exception as e:
         print(f"Error processing connection: {e}")
+        print(traceback.format_exc())
         raise e
     finally:
         writer.close()

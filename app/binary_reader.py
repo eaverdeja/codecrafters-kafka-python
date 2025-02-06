@@ -40,6 +40,9 @@ class BinaryReader:
         self.seek(current_pos)
         return data
 
+    def read_all(self):
+        return self.stream.read()
+
     def skip(self, size):
         """Skip ahead by size bytes"""
         return self.seek(size, 1)
